@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "MireaEasyAuth",
+  "version": "2.2.4",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mirea-easy-auth@mirea.ru",
+      "strict_min_version": "109.0",
+      "data_collection_permissions": {
+        "required": ["none"],
+        "optional": []
+      }
+    }
+  },
+  "description": "Автоматически подставляет код подтверждения из Gmail на странице входа РТУ МИРЭА",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://sso.mirea.ru/*",
+    "https://gmail.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "MireaEasyAuth"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://sso.mirea.ru/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
