@@ -1,11 +1,11 @@
 'use strict';
 
-// ── Single loopback redirect URI for all platforms ────────────────────────────
-const REDIRECT_URI = 'http://127.0.0.1/';
+// ── Дефолтные OAuth credentials (Desktop app, client_secret не конфиденциален) ─
+// Пользователь может заменить их своими в полях ниже.
+const DEFAULT_CLIENT_ID     = '290262895166-2cir7hbf8i30l6md6qtemta6pa9fc28a.apps.googleusercontent.com';
+const DEFAULT_CLIENT_SECRET = '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';
 
 const $ = id => document.getElementById(id);
-
-$('redirectUriHint').textContent = REDIRECT_URI;
 
 // ── Status ────────────────────────────────────────────────────────────────────
 function showStatus(msg, type = 'info') {
@@ -36,34 +36,33 @@ function showSignedOut() {
 }
 
 // ── Load saved state ──────────────────────────────────────────────────────────
-chrome.storage.local.get(['clientId', 'enabled', 'autoSkip', 'gmailProfile'], data => {
-  if (data.clientId) $('clientId').value = data.clientId;
-  $('enabled').checked = data.enabled !== false;
+chrome.storage.local.get(['clientId', 'clientSecret', 'enabled', 'autoSkip', 'gmailProfile'], data => {
+  $('clientId').value     = data.clientId     || DEFAULT_CLIENT_ID;
+  $('clientSecret').value = data.clientSecret || DEFAULT_CLIENT_SECRET;
+  $('enabled').checked  = data.enabled  !== false;
   $('autoSkip').checked = data.autoSkip !== false;
   data.gmailProfile ? showSignedIn(data.gmailProfile) : showSignedOut();
 });
 
 // ── Toggles ───────────────────────────────────────────────────────────────────
-$('enabled').addEventListener('change', () => chrome.storage.local.set({ enabled: $('enabled').checked }));
+$('enabled').addEventListener('change',  () => chrome.storage.local.set({ enabled:   $('enabled').checked }));
 $('autoSkip').addEventListener('change', () => chrome.storage.local.set({ autoSkip: $('autoSkip').checked }));
 
 // ── Sign in ───────────────────────────────────────────────────────────────────
-// OAuth flow runs in background.js so it survives popup close in Firefox.
 $('btnSignIn').addEventListener('click', () => {
-  const clientId = $('clientId').value.trim();
-  if (!clientId) { showStatus('Введите Client ID', 'err'); return; }
+  const clientId     = $('clientId').value.trim();
+  const clientSecret = $('clientSecret').value.trim();
+  if (!clientId)     { showStatus('Введите Client ID', 'err');     return; }
+  if (!clientSecret) { showStatus('Введите Client Secret', 'err'); return; }
 
-  chrome.storage.local.set({ clientId });
+  chrome.storage.local.set({ clientId, clientSecret });
   showStatus('Открываю авторизацию…', 'info');
   $('btnSignIn').disabled = true;
 
-  chrome.runtime.sendMessage({ type: 'SIGN_IN', clientId }, response => {
+  chrome.runtime.sendMessage({ type: 'SIGN_IN', clientId, clientSecret }, response => {
     $('btnSignIn').disabled = false;
 
-    // If popup was closed during OAuth and just reopened, sendMessage callback
-    // may not fire. On next open, storage load above will restore state.
     if (chrome.runtime.lastError) {
-      // Check storage in case sign-in succeeded while popup was closed
       chrome.storage.local.get(['gmailProfile'], data => {
         if (data.gmailProfile) { showSignedIn(data.gmailProfile); showStatus('Авторизация успешна!', 'ok'); }
         else showStatus('Ошибка связи с фоном расширения', 'err');
@@ -83,7 +82,7 @@ $('btnSignIn').addEventListener('click', () => {
 
 // ── Sign out ──────────────────────────────────────────────────────────────────
 $('btnSignOut').addEventListener('click', () => {
-  chrome.storage.local.remove(['gmailProfile', 'gmailToken', 'gmailTokenExpiry']);
+  chrome.storage.local.remove(['gmailProfile', 'gmailToken', 'gmailTokenExpiry', 'gmailRefreshToken']);
   showSignedOut();
   showStatus('Вы вышли из аккаунта', 'info');
 });

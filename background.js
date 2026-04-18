@@ -1,26 +1,19 @@
 'use strict';
 
-// ── Single loopback redirect URI for all platforms ────────────────────────────
-// launchWebAuthFlow отклоняет http:// redirect URI в Яндекс Браузере («Authorization
-// page could not be loaded») и возвращает «redirect_uri not allowed» в Firefox.
-// Вместо этого используем tabs-based OAuth flow для всех браузеров:
-// открываем вкладку, перехватываем переход на http://127.0.0.1/ через tabs.onUpdated.
-// Google принимает 127.0.0.1 через исключение для loopback-адресов.
+// ── OAuth redirect URI (loopback, принимается Google без регистрации порта) ───
 const REDIRECT_URI = 'http://127.0.0.1/';
 
 // ── Cross-browser tabs API (Promise-based) ────────────────────────────────────
 const _tabs = (() => {
-  // Firefox: browser.tabs — Promise-based
   if (typeof browser !== 'undefined' && browser.tabs) return browser.tabs;
-  // Chrome / Yandex / Edge: chrome.tabs — callback-based, wrap in Promises
   return {
-    create: (opts) => new Promise((res, rej) =>
+    create:    (opts) => new Promise((res, rej) =>
       chrome.tabs.create(opts, tab => {
         if (chrome.runtime.lastError) rej(new Error(chrome.runtime.lastError.message));
         else res(tab);
       })
     ),
-    remove: (id) => new Promise(res => chrome.tabs.remove(id, () => res())),
+    remove:    (id)   => new Promise(res => chrome.tabs.remove(id, () => res())),
     onUpdated: chrome.tabs.onUpdated,
     onRemoved: chrome.tabs.onRemoved,
   };
@@ -31,53 +24,60 @@ const ERR = (...args) => console.error('[MireaEasyAuth BG]', ...args);
 
 LOG('Service worker started');
 
+// ── Message router ────────────────────────────────────────────────────────────
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   LOG('Message received:', message.type);
 
   if (message.type === 'CHECK_EMAIL') {
     handleCheckEmail(message.since)
-      .then(result => { LOG('CHECK_EMAIL response:', JSON.stringify(result)); sendResponse(result); })
-      .catch(e => { ERR('CHECK_EMAIL error:', e.message); sendResponse({ error: String(e.message) }); });
+      .then(r  => { LOG('CHECK_EMAIL ok:', JSON.stringify(r)); sendResponse(r); })
+      .catch(e => { ERR('CHECK_EMAIL err:', e.message);        sendResponse({ error: String(e.message) }); });
     return true;
   }
 
   if (message.type === 'SIGN_IN') {
-    handleSignIn(message.clientId)
-      .then(result => { LOG('SIGN_IN response:', JSON.stringify(result)); sendResponse(result); })
-      .catch(e => { ERR('SIGN_IN error:', e.message); sendResponse({ error: String(e.message) }); });
+    handleSignIn(message.clientId, message.clientSecret)
+      .then(r  => { LOG('SIGN_IN ok:', JSON.stringify(r)); sendResponse(r); })
+      .catch(e => { ERR('SIGN_IN err:', e.message);        sendResponse({ error: String(e.message) }); });
     return true;
   }
 
   return false;
 });
 
-// ── Main handler ──────────────────────────────────────────────────────────────
+// ── Check email ───────────────────────────────────────────────────────────────
 
 async function handleCheckEmail(since) {
-  const settings = await getStorage(['enabled', 'clientId', 'gmailToken', 'gmailTokenExpiry', 'gmailProfile']);
-  LOG('Settings loaded:', JSON.stringify({
-    enabled: settings.enabled,
-    hasClientId: !!settings.clientId,
-    hasToken: !!settings.gmailToken,
-    tokenExpiry: settings.gmailTokenExpiry,
-    profile: settings.gmailProfile,
-  }));
+  const s = await getStorage(['enabled', 'clientId', 'clientSecret', 'gmailToken', 'gmailTokenExpiry', 'gmailRefreshToken']);
 
-  if (settings.enabled === false) return { error: 'disabled' };
-  if (!settings.clientId)        return { error: 'not_configured' };
-  if (!settings.gmailToken)      return { error: 'not_signed_in' };
+  if (s.enabled === false) return { error: 'disabled' };
+  if (!s.clientId)         return { error: 'not_configured' };
+  if (!s.gmailToken)       return { error: 'not_signed_in' };
 
-  // Tabs-based flow не поддерживает тихое обновление токена в фоне.
-  // Если токен истёк — сообщаем пользователю войти заново через попап.
-  if (!settings.gmailTokenExpiry || Date.now() > settings.gmailTokenExpiry - 60_000) {
-    LOG('Token expired or close to expiry');
-    await setStorage({ gmailToken: null, gmailTokenExpiry: null });
-    return { error: 'token_expired' };
+  let token = s.gmailToken;
+
+  // Тихое обновление токена когда он истёк (или истекает в ближайшие 60 сек)
+  if (!s.gmailTokenExpiry || Date.now() > s.gmailTokenExpiry - 60_000) {
+    if (!s.gmailRefreshToken || !s.clientSecret) {
+      await setStorage({ gmailToken: null, gmailTokenExpiry: null });
+      return { error: 'token_expired' };
+    }
+    try {
+      LOG('Access token expired — silent refresh via refresh_token...');
+      token = await refreshAccessToken(s.gmailRefreshToken, s.clientId, s.clientSecret);
+      await setStorage({ gmailToken: token, gmailTokenExpiry: Date.now() + 3500 * 1000 });
+      LOG('Silent refresh OK');
+    } catch (e) {
+      ERR('Silent refresh failed:', e.message);
+      await setStorage({ gmailToken: null, gmailTokenExpiry: null, gmailRefreshToken: null });
+      return { error: 'token_expired' };
+    }
   }
 
   try {
     LOG('Calling Gmail API, since:', since);
-    const code = await searchGmailCode(settings.gmailToken, since);
+    const code = await searchGmailCode(token, since);
     LOG('Gmail search result:', code);
     return code ? { code } : { error: 'not_found' };
   } catch (e) {
@@ -93,46 +93,30 @@ async function handleCheckEmail(since) {
 // ── Gmail API ─────────────────────────────────────────────────────────────────
 
 async function searchGmailCode(token, since) {
-  const query = 'from:sso@mirea.ru newer_than:2h';
   const url =
     'https://gmail.googleapis.com/gmail/v1/users/me/messages' +
-    '?q=' + encodeURIComponent(query) +
+    '?q=' + encodeURIComponent('from:sso@mirea.ru newer_than:2h') +
     '&maxResults=10';
 
-  LOG('Gmail list request:', url);
   const listRes = await gmailFetch(url, token);
-  LOG('Gmail list response:', JSON.stringify(listRes));
-
-  if (!listRes.messages || listRes.messages.length === 0) {
-    LOG('No messages found matching query');
-    return null;
-  }
+  if (!listRes.messages || listRes.messages.length === 0) return null;
 
   const sinceMs = since ? new Date(since).getTime() : Date.now() - 120_000;
-  LOG('Filtering messages newer than:', new Date(sinceMs).toISOString());
 
   for (const { id } of listRes.messages) {
-    const msgUrl =
+    const msg = await gmailFetch(
       'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + id +
-      '?format=metadata&metadataHeaders=Subject&metadataHeaders=Date';
-
-    const msg = await gmailFetch(msgUrl, token);
+      '?format=metadata&metadataHeaders=Subject', token
+    );
     const internalDate = parseInt(msg.internalDate || '0', 10);
-    const headers = (msg.payload && msg.payload.headers) || [];
-    const subject = (headers.find(h => h.name === 'Subject') || {}).value || '';
+    if (internalDate < sinceMs) continue;
 
-    LOG('Message id:', id, '| internalDate:', new Date(internalDate).toISOString(), '| subject:', subject);
-
-    if (internalDate < sinceMs) {
-      LOG('Message too old, skipping');
-      continue;
-    }
+    const subject = ((msg.payload?.headers || []).find(h => h.name === 'Subject') || {}).value || '';
+    LOG('id:', id, 'date:', new Date(internalDate).toISOString(), 'subj:', subject);
 
     const code = extractCode(subject);
-    LOG('Extracted code:', code);
     if (code) return code;
   }
-
   return null;
 }
 
@@ -144,8 +128,6 @@ async function gmailFetch(url, token) {
   return res.json();
 }
 
-// ── Code extraction ───────────────────────────────────────────────────────────
-
 function extractCode(subject) {
   const m1 = subject.match(/(\d{6})\s*[–—\-]\s*ваш код/u);
   if (m1) return m1[1];
@@ -153,46 +135,110 @@ function extractCode(subject) {
   return m2 ? m2[1] : null;
 }
 
-// ── Sign in (called from popup via message) ───────────────────────────────────
+// ── Sign in ───────────────────────────────────────────────────────────────────
 
-async function handleSignIn(clientId) {
-  const token = await doOAuthFlow(clientId);
-  const profile = await fetchGmailProfile(token);
+async function handleSignIn(clientId, clientSecret) {
+  const tokens  = await doOAuthFlow(clientId, clientSecret);
+  const profile = await fetchGmailProfile(tokens.access_token);
   await setStorage({
-    gmailProfile: profile,
-    gmailToken: token,
-    gmailTokenExpiry: Date.now() + 3500 * 1000,
+    gmailProfile:      profile,
+    gmailToken:        tokens.access_token,
+    gmailTokenExpiry:  Date.now() + (tokens.expires_in ?? 3500) * 1000,
+    gmailRefreshToken: tokens.refresh_token ?? null,
   });
   return { profile };
 }
 
-// ── OAuth flow (tabs-based, all platforms) ────────────────────────────────────
+// ── OAuth: Authorization Code + PKCE ─────────────────────────────────────────
+// Преимущество перед implicit flow: Google возвращает refresh_token,
+// который позволяет тихо обновлять access_token без участия пользователя.
 
-async function doOAuthFlow(clientId) {
-  const scope = 'https://www.googleapis.com/auth/gmail.readonly email profile';
+async function doOAuthFlow(clientId, clientSecret) {
+  const { verifier, challenge } = await generatePKCE();
+
   const authUrl =
     'https://accounts.google.com/o/oauth2/v2/auth' +
-    '?client_id=' + encodeURIComponent(clientId) +
-    '&redirect_uri=' + encodeURIComponent(REDIRECT_URI) +
-    '&response_type=token' +
-    '&scope=' + encodeURIComponent(scope) +
-    '&prompt=select_account';
+    '?client_id='             + encodeURIComponent(clientId) +
+    '&redirect_uri='          + encodeURIComponent(REDIRECT_URI) +
+    '&response_type=code' +
+    '&scope='                 + encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly email profile') +
+    '&code_challenge='        + challenge +
+    '&code_challenge_method=S256' +
+    '&access_type=offline' +   // запросить refresh_token
+    '&prompt=consent';         // всегда возвращать refresh_token (даже при повторном входе)
 
-  LOG('doOAuthFlow via tabs, redirectUri=' + REDIRECT_URI);
-
+  LOG('doOAuthFlow PKCE, redirectUri=' + REDIRECT_URI);
   const redirectUrl = await oAuthWithTabs(authUrl, REDIRECT_URI);
-  LOG('Redirect URL received (truncated):', redirectUrl.split('#')[0] + '#...');
 
-  // Google возвращает токен в хеш-фрагменте: http://127.0.0.1/#access_token=...
-  // Заменяем # на ? чтобы URLSearchParams мог разобрать параметры.
-  const params = new URLSearchParams(new URL(redirectUrl.replace('#', '?')).search);
-  const token = params.get('access_token');
-  if (!token) throw new Error('Токен не получен в redirect URL');
-  return token;
+  const params = new URL(redirectUrl).searchParams;
+  const error  = params.get('error');
+  const code   = params.get('code');
+
+  if (error) throw new Error('oauth_error: ' + error);
+  if (!code) throw new Error('Код авторизации не получен');
+
+  return exchangeCodeForTokens(code, verifier, clientId, clientSecret);
 }
 
-// Открывает вкладку с OAuth-страницей Google и ждёт перехода на REDIRECT_URI.
-// Работает во всех браузерах: Chrome, Яндекс, Firefox Desktop, Firefox Android.
+// PKCE helpers
+async function generatePKCE() {
+  const array    = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  const verifier = base64url(array);
+  const digest   = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  return { verifier, challenge: base64url(new Uint8Array(digest)) };
+}
+
+function base64url(buf) {
+  return btoa(String.fromCharCode(...buf))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+// Обмен кода на токены
+async function exchangeCodeForTokens(code, verifier, clientId, clientSecret) {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id:     clientId,
+      client_secret: clientSecret,
+      redirect_uri:  REDIRECT_URI,
+      grant_type:    'authorization_code',
+      code_verifier: verifier,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error('token_exchange_failed: ' + (err.error_description || err.error || res.status));
+  }
+  const data = await res.json();
+  LOG('Token exchange OK, has refresh_token:', !!data.refresh_token);
+  return data; // { access_token, refresh_token, expires_in, ... }
+}
+
+// Тихое обновление access token через refresh token
+async function refreshAccessToken(refreshToken, clientId, clientSecret) {
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      refresh_token: refreshToken,
+      client_id:     clientId,
+      client_secret: clientSecret,
+      grant_type:    'refresh_token',
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error('refresh_failed: ' + (err.error_description || err.error || res.status));
+  }
+  const data = await res.json();
+  return data.access_token;
+}
+
+// ── Tabs-based OAuth window ───────────────────────────────────────────────────
+
 function oAuthWithTabs(authUrl, redirectUri) {
   return new Promise((resolve, reject) => {
     let authTabId = null;
@@ -203,17 +249,15 @@ function oAuthWithTabs(authUrl, redirectUri) {
       if (removeTab && authTabId !== null) {
         const id = authTabId;
         authTabId = null;
-        _tabs.remove(id).catch ? _tabs.remove(id).catch(() => {}) : _tabs.remove(id);
+        _tabs.remove(id).catch?.(() => {});
       }
     }
 
     function onUpdated(tabId, changeInfo) {
-      if (tabId !== authTabId) return;
+      if (tabId !== authTabId || !changeInfo.url) return;
       const url = changeInfo.url;
-      if (!url) return;
-      LOG('Tab updated url:', url.split('#')[0]);
-      // Перехватываем переход на наш redirect URI
-      if (url.startsWith(redirectUri) || url.includes('access_token=')) {
+      // Auth code flow: редирект содержит ?code= или ?error= в query string
+      if (url.startsWith(redirectUri) && (url.includes('code=') || url.includes('error='))) {
         cleanup(true);
         resolve(url);
       }
@@ -232,18 +276,16 @@ function oAuthWithTabs(authUrl, redirectUri) {
     _tabs.create({ url: authUrl }).then(tab => {
       authTabId = tab.id;
       LOG('Opened OAuth tab id=' + authTabId);
-    }).catch(e => {
-      cleanup(false);
-      reject(e);
-    });
+    }).catch(e => { cleanup(false); reject(e); });
 
-    // Таймаут 5 минут
     setTimeout(() => {
       cleanup(true);
       reject(new Error('Время авторизации истекло (5 мин)'));
     }, 300_000);
   });
 }
+
+// ── Profile & storage ─────────────────────────────────────────────────────────
 
 async function fetchGmailProfile(token) {
   const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
@@ -252,8 +294,6 @@ async function fetchGmailProfile(token) {
   if (!res.ok) throw new Error('Не удалось получить профиль: HTTP ' + res.status);
   return res.json();
 }
-
-// ── Storage helpers ───────────────────────────────────────────────────────────
 
 function getStorage(keys) {
   return new Promise(resolve => chrome.storage.local.get(keys, resolve));
