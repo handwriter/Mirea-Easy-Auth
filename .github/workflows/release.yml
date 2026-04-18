@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Read version from manifest
+        id: version
+        run: echo "value=$(jq -r '.version' manifest.json)" >> $GITHUB_OUTPUT
+
+      - name: Check if release already exists
+        id: check
+        run: |
+          if gh release view "v${{ steps.version.outputs.value }}" &>/dev/null; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Release v${{ steps.version.outputs.value }} already exists — skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install web-ext
+        if: steps.check.outputs.exists == 'false'
+        run: npm install -g web-ext
+
+      # Подписывает расширение через Mozilla AMO и выгружает его как unlisted.
+      # Unlisted-расширение не появляется в каталоге AMO, но подписано Mozilla —
+      # Firefox принимает его при ручной установке. Если нужна публикация в каталоге,
+      # замените --channel=unlisted на --channel=listed (подписанный XPI будет
+      # доступен только после ручной проверки командой Mozilla).
+      - name: Sign extension (Mozilla AMO)
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          web-ext sign \
+            --api-key="${{ secrets.AMO_JWT_ISSUER }}" \
+            --api-secret="${{ secrets.AMO_JWT_SECRET }}" \
+            --channel=unlisted
+        env:
+          NODE_OPTIONS: --dns-result-order=ipv4first
+
+      - name: Rename signed XPI
+        if: steps.check.outputs.exists == 'false'
+        run: mv web-ext-artifacts/*.xpi MireaEasyAuth.xpi
+
+      - name: Create source zip
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          zip -r MireaEasyAuth-source.zip . \
+            --exclude "*.git*" \
+            --exclude ".github/*" \
+            --exclude "web-ext-artifacts/*" \
+            --exclude "node_modules/*" \
+            --exclude "*.xpi" \
+            --exclude "*.zip"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.value }}
+          name: v${{ steps.version.outputs.value }}
+          generate_release_notes: true
+          files: |
+            MireaEasyAuth.xpi
+            MireaEasyAuth-source.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
