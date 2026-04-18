@@ -10,6 +10,7 @@
 - [Установка](#установка)
   - [Chrome / Edge / Brave](#chrome--edge--brave)
   - [Firefox](#firefox)
+  - [Firefox Nightly для Android](#firefox-nightly-для-android)
   - [Safari](#safari)
 - [Настройка Google OAuth](#настройка-google-oauth)
 - [Использование без Gmail](#использование-без-gmail)
@@ -63,6 +64,19 @@
 4. Выберите скачанный файл `MireaEasyAuth.xpi`.
 5. В диалоге подтверждения нажмите **Добавить**.
 6. Расширение установлено и активно.
+
+---
+
+### Firefox Nightly для Android
+
+На Android расширения поддерживает только **Firefox Nightly**.
+
+1. Установите [Firefox Nightly](https://play.google.com/store/apps/details?id=org.mozilla.fenix) из Google Play.
+2. Откройте Firefox Nightly, перейдите в **Меню (⋮) → Настройки → О Firefox Nightly**.
+3. Нажмите на логотип Firefox **5 раз подряд** — появится уведомление «Режим отладки включён».
+4. Вернитесь в **Настройки** — в разделе "Дополнительные" появится пункт **Установить расширение из файла**. Нажмите.
+5. Выберите скачанный `MireaEasyAuth.xpi`.
+6. В диалоге подтверждения нажмите **Добавить** — расширение установлено.
 
 ---
 
