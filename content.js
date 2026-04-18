@@ -33,6 +33,12 @@ waitForElement('#kc-max-otp-buttons-form', 10000).then(form => {
   }
 });
 
+function getCodeIdFromPage() {
+  const text = document.body?.innerText || '';
+  const m = text.match(/#\d{1,3}\b/);
+  return m ? m[0] : null;
+}
+
 function waitForElement(selector, timeoutMs) {
   return new Promise(resolve => {
     const existing = document.querySelector(selector);
@@ -69,7 +75,8 @@ function init(emailInput) {
   const POLL_INTERVAL_MS = 3000;
   const TIMEOUT_MS = 90000;
   const startTime = new Date().toISOString();
-  LOG('startTime:', startTime);
+  const codeId = getCodeIdFromPage();
+  LOG('startTime:', startTime, 'codeId:', codeId);
 
   let pollTimer = null;
   let elapsed = 0;
@@ -95,7 +102,7 @@ function init(emailInput) {
 
     LOG('Sending CHECK_EMAIL to background, since:', startTime);
 
-    chrome.runtime.sendMessage({ type: 'CHECK_EMAIL', since: startTime }, response => {
+    chrome.runtime.sendMessage({ type: 'CHECK_EMAIL', since: startTime, codeId }, response => {
       if (done) return;
 
       if (chrome.runtime.lastError) {
@@ -142,13 +149,13 @@ function init(emailInput) {
       if (response.code) {
         done = true;
         clearInterval(pollTimer);
-        LOG('Code received:', response.code);
-        fillCode(response.code);
+        LOG('Code received:', response.code, 'messageId:', response.messageId);
+        fillCode(response.code, response.messageId);
       }
     });
   }
 
-  function fillCode(code) {
+  function fillCode(code, messageId) {
     setStatus('Код получен: ' + code + '. Отправка…', 'success');
 
     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
@@ -171,6 +178,17 @@ function init(emailInput) {
           form.submit();
         }
       }
+
+      if (messageId) {
+        chrome.storage.local.get(['trashAfterAuth'], data => {
+          if (data.trashAfterAuth !== false) {
+            chrome.runtime.sendMessage({ type: 'DELETE_EMAIL', messageId }, r => {
+              LOG('DELETE_EMAIL response:', JSON.stringify(r));
+            });
+          }
+        });
+      }
+
       setTimeout(() => overlay.remove(), 1500);
     }, 600);
   }

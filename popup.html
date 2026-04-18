@@ -2,52 +2,69 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MireaEasyAuth</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    html { height: 100%; }
+
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 13px;
+      font-size: 14px;
       color: #1a1a1a;
       background: #f5f5f5;
-      width: 340px;
+      /* desktop popup: min-width держит размер окна; mobile: растягивается на весь экран */
+      width: 100%;
+      min-width: 320px;
+      max-width: 560px;
+      min-height: 100vh;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
     }
 
     .header {
       background: #003087;
       color: #fff;
-      padding: 12px 16px;
+      padding: 14px 18px;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
+      flex-shrink: 0;
     }
-    .header h1 { font-size: 15px; font-weight: 600; }
+    .header h1 { font-size: 16px; font-weight: 600; }
 
-    .section { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .section {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      flex: 1;
+    }
 
     /* Account card */
     .account-card {
       background: #fff;
       border: 1px solid #e0e0e0;
-      border-radius: 8px;
-      padding: 12px 14px;
+      border-radius: 10px;
+      padding: 14px 16px;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
     .account-avatar {
-      width: 36px; height: 36px; border-radius: 50%;
+      width: 42px; height: 42px; border-radius: 50%;
       background: #003087; color: #fff;
       display: flex; align-items: center; justify-content: center;
-      font-size: 15px; font-weight: 700; flex-shrink: 0;
+      font-size: 17px; font-weight: 700; flex-shrink: 0;
     }
     .account-info { flex: 1; min-width: 0; }
-    .account-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .account-email { font-size: 11px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .account-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .account-email { font-size: 12px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
     .account-badge {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.5px; padding: 2px 6px; border-radius: 4px;
+      letter-spacing: 0.5px; padding: 3px 7px; border-radius: 4px;
       background: #e6f4ea; color: #1e7e34; flex-shrink: 0;
     }
 
@@ -55,66 +72,86 @@
     .signin-block {
       background: #fff;
       border: 1px solid #e0e0e0;
-      border-radius: 8px;
-      padding: 14px;
+      border-radius: 10px;
+      padding: 16px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
     }
-    .signin-block p { font-size: 12px; color: #555; line-height: 1.5; }
+    .signin-block p { font-size: 13px; color: #555; line-height: 1.55; }
 
     /* Client ID field */
-    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
     label { font-size: 11px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
-    input[type="text"] {
-      border: 1px solid #d0d0d0; border-radius: 6px;
-      padding: 7px 10px; font-size: 12px; background: #fff; outline: none;
-      font-family: monospace;
+    input[type="text"], input[type="password"] {
+      border: 1px solid #d0d0d0; border-radius: 8px;
+      padding: 10px 12px; font-size: 13px; background: #fff; outline: none;
+      font-family: monospace; width: 100%;
     }
-    input[type="text"]:focus { border-color: #003087; }
+    input[type="text"]:focus, input[type="password"]:focus { border-color: #003087; }
 
     /* Buttons */
     .btn {
-      border: none; border-radius: 6px; padding: 9px 14px;
-      font-size: 13px; font-weight: 600; cursor: pointer;
+      border: none; border-radius: 8px; padding: 12px 16px;
+      font-size: 14px; font-weight: 600; cursor: pointer;
       display: flex; align-items: center; justify-content: center; gap: 8px;
-      transition: opacity 0.15s;
+      transition: opacity 0.15s; width: 100%;
     }
-    .btn:hover { opacity: 0.88; }
+    .btn:active { opacity: 0.8; }
     .btn-google { background: #fff; color: #3c4043; border: 1px solid #dadce0; }
-    .btn-signout { background: #f5f5f5; color: #666; border: 1px solid #d0d0d0; font-size: 12px; padding: 6px 12px; }
+    .btn-signout {
+      background: #f5f5f5; color: #666; border: 1px solid #d0d0d0;
+      font-size: 13px; padding: 10px 14px;
+    }
     .btn-primary { background: #003087; color: #fff; }
 
     /* Toggle */
-    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
-    .switch { position: relative; width: 36px; height: 20px; }
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      min-height: 44px; /* touch target */
+    }
+    .toggle-row span { font-size: 14px; color: #333; flex: 1; padding-right: 12px; }
+    .switch { position: relative; width: 44px; height: 26px; flex-shrink: 0; }
     .switch input { display: none; }
-    .slider { position: absolute; inset: 0; background: #ccc; border-radius: 20px; cursor: pointer; transition: background 0.2s; }
-    .slider::before { content: ''; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: transform 0.2s; }
+    .slider {
+      position: absolute; inset: 0; background: #ccc;
+      border-radius: 26px; cursor: pointer; transition: background 0.2s;
+    }
+    .slider::before {
+      content: ''; position: absolute;
+      width: 20px; height: 20px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: transform 0.2s;
+    }
     .switch input:checked + .slider { background: #003087; }
-    .switch input:checked + .slider::before { transform: translateX(16px); }
+    .switch input:checked + .slider::before { transform: translateX(18px); }
 
     /* Status */
-    .status { font-size: 12px; padding: 6px 10px; border-radius: 5px; display: none; }
-    .status.ok  { display: block; background: #e6f4ea; color: #1e7e34; }
-    .status.err { display: block; background: #fdecea; color: #c62828; }
+    .status { font-size: 13px; padding: 8px 12px; border-radius: 6px; display: none; }
+    .status.ok   { display: block; background: #e6f4ea; color: #1e7e34; }
+    .status.err  { display: block; background: #fdecea; color: #c62828; }
     .status.info { display: block; background: #e8f0fe; color: #1a73e8; }
 
     /* Help */
     .help {
-      font-size: 11px; color: #888; line-height: 1.5;
+      font-size: 12px; color: #888; line-height: 1.55;
       background: #fff; border: 1px solid #e0e0e0;
-      border-radius: 8px; padding: 10px 12px;
+      border-radius: 10px; padding: 12px 14px;
     }
     .help a { color: #1a73e8; text-decoration: none; }
-    .help ol { padding-left: 16px; }
-    .help li { margin-top: 3px; }
-    .help code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+    .help ol { padding-left: 18px; }
+    .help li { margin-top: 4px; }
+    .help code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
 
-    details summary { cursor: pointer; color: #1a73e8; font-size: 11px; user-select: none; }
+    details summary { cursor: pointer; color: #1a73e8; font-size: 13px; user-select: none; }
     details[open] summary { margin-bottom: 8px; }
 
     hr { border: none; border-top: 1px solid #e0e0e0; }
+
+    /* На широких экранах (планшеты) — чуть больше отступы */
+    @media (min-width: 480px) {
+      .section { padding: 24px; gap: 16px; }
+      .header { padding: 16px 24px; }
+    }
   </style>
 </head>
 <body>
@@ -152,6 +189,14 @@
     <span style="font-size:13px;color:#333">Автонажатие «Пропустить»</span>
     <label class="switch">
       <input type="checkbox" id="autoSkip" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div id="trashToggleRow" class="toggle-row" style="display:none">
+    <span style="font-size:13px;color:#333">Удалять письмо после входа</span>
+    <label class="switch">
+      <input type="checkbox" id="trashAfterAuth" checked>
       <span class="slider"></span>
     </label>
   </div>

@@ -30,9 +30,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   LOG('Message received:', message.type);
 
   if (message.type === 'CHECK_EMAIL') {
-    handleCheckEmail(message.since)
+    handleCheckEmail(message.since, message.codeId)
       .then(r  => { LOG('CHECK_EMAIL ok:', JSON.stringify(r)); sendResponse(r); })
       .catch(e => { ERR('CHECK_EMAIL err:', e.message);        sendResponse({ error: String(e.message) }); });
+    return true;
+  }
+
+  if (message.type === 'DELETE_EMAIL') {
+    handleDeleteEmail(message.messageId)
+      .then(r  => { LOG('DELETE_EMAIL ok:', JSON.stringify(r)); sendResponse(r); })
+      .catch(e => { ERR('DELETE_EMAIL err:', e.message);        sendResponse({ error: String(e.message) }); });
     return true;
   }
 
@@ -48,7 +55,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // ── Check email ───────────────────────────────────────────────────────────────
 
-async function handleCheckEmail(since) {
+async function handleCheckEmail(since, codeId) {
   const s = await getStorage(['enabled', 'clientId', 'clientSecret', 'gmailToken', 'gmailTokenExpiry', 'gmailRefreshToken']);
 
   if (s.enabled === false) return { error: 'disabled' };
@@ -76,10 +83,10 @@ async function handleCheckEmail(since) {
   }
 
   try {
-    LOG('Calling Gmail API, since:', since);
-    const code = await searchGmailCode(token, since);
-    LOG('Gmail search result:', code);
-    return code ? { code } : { error: 'not_found' };
+    LOG('Calling Gmail API, since:', since, 'codeId:', codeId);
+    const result = await searchGmailCode(token, since, codeId);
+    LOG('Gmail search result:', result);
+    return result ? { code: result.code, messageId: result.messageId } : { error: 'not_found' };
   } catch (e) {
     ERR('Gmail API error:', e.message);
     if (e.message === 'token_expired') {
@@ -92,16 +99,17 @@ async function handleCheckEmail(since) {
 
 // ── Gmail API ─────────────────────────────────────────────────────────────────
 
-async function searchGmailCode(token, since) {
+async function searchGmailCode(token, since, codeId) {
+  const sinceMs = since ? new Date(since).getTime() : Date.now() - 120_000;
+  const afterSec = Math.floor(sinceMs / 1000);
+
   const url =
     'https://gmail.googleapis.com/gmail/v1/users/me/messages' +
-    '?q=' + encodeURIComponent('from:sso@mirea.ru newer_than:2h') +
+    '?q=' + encodeURIComponent('from:sso@mirea.ru after:' + afterSec) +
     '&maxResults=10';
 
   const listRes = await gmailFetch(url, token);
   if (!listRes.messages || listRes.messages.length === 0) return null;
-
-  const sinceMs = since ? new Date(since).getTime() : Date.now() - 120_000;
 
   for (const { id } of listRes.messages) {
     const msg = await gmailFetch(
@@ -114,8 +122,13 @@ async function searchGmailCode(token, since) {
     const subject = ((msg.payload?.headers || []).find(h => h.name === 'Subject') || {}).value || '';
     LOG('id:', id, 'date:', new Date(internalDate).toISOString(), 'subj:', subject);
 
+    if (codeId && !subject.includes(codeId)) {
+      LOG('codeId', codeId, 'not found in subject, skipping');
+      continue;
+    }
+
     const code = extractCode(subject);
-    if (code) return code;
+    if (code) return { code, messageId: id };
   }
   return null;
 }
@@ -133,6 +146,33 @@ function extractCode(subject) {
   if (m1) return m1[1];
   const m2 = subject.match(/\b(\d{6})\b/);
   return m2 ? m2[1] : null;
+}
+
+// ── Delete email ─────────────────────────────────────────────────────────────
+
+async function handleDeleteEmail(messageId) {
+  const s = await getStorage(['gmailToken', 'gmailTokenExpiry', 'gmailRefreshToken', 'clientId', 'clientSecret']);
+  let token = s.gmailToken;
+
+  if (!token) return { error: 'not_signed_in' };
+
+  if (!s.gmailTokenExpiry || Date.now() > s.gmailTokenExpiry - 60_000) {
+    if (!s.gmailRefreshToken || !s.clientSecret) return { error: 'token_expired' };
+    try {
+      token = await refreshAccessToken(s.gmailRefreshToken, s.clientId, s.clientSecret);
+      await setStorage({ gmailToken: token, gmailTokenExpiry: Date.now() + 3500 * 1000 });
+    } catch (e) {
+      return { error: 'token_expired' };
+    }
+  }
+
+  const res = await fetch(
+    'https://gmail.googleapis.com/gmail/v1/users/me/messages/' + messageId + '/trash',
+    { method: 'POST', headers: { Authorization: 'Bearer ' + token } }
+  );
+  LOG('TRASH message', messageId, 'HTTP', res.status);
+  if (res.ok) return { ok: true };
+  throw new Error('gmail_trash_error:' + res.status);
 }
 
 // ── Sign in ───────────────────────────────────────────────────────────────────
@@ -161,7 +201,7 @@ async function doOAuthFlow(clientId, clientSecret) {
     '?client_id='             + encodeURIComponent(clientId) +
     '&redirect_uri='          + encodeURIComponent(REDIRECT_URI) +
     '&response_type=code' +
-    '&scope='                 + encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly email profile') +
+    '&scope='                 + encodeURIComponent('https://www.googleapis.com/auth/gmail.modify email profile') +
     '&code_challenge='        + challenge +
     '&code_challenge_method=S256' +
     '&access_type=offline' +   // запросить refresh_token

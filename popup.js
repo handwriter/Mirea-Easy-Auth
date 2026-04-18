@@ -20,6 +20,7 @@ function showSignedIn(profile) {
   $('accountCard').style.display = 'flex';
   $('toggleRow').style.display = 'flex';
   $('skipToggleRow').style.display = 'flex';
+  $('trashToggleRow').style.display = 'flex';
   $('btnSignOut').style.display = '';
   $('signinBlock').style.display = 'none';
   $('accountName').textContent = profile.name || profile.email;
@@ -31,22 +32,25 @@ function showSignedOut() {
   $('accountCard').style.display = 'none';
   $('toggleRow').style.display = 'none';
   $('skipToggleRow').style.display = 'none';
+  $('trashToggleRow').style.display = 'none';
   $('btnSignOut').style.display = 'none';
   $('signinBlock').style.display = 'flex';
 }
 
 // ── Load saved state ──────────────────────────────────────────────────────────
-chrome.storage.local.get(['clientId', 'clientSecret', 'enabled', 'autoSkip', 'gmailProfile'], data => {
+chrome.storage.local.get(['clientId', 'clientSecret', 'enabled', 'autoSkip', 'trashAfterAuth', 'gmailProfile'], data => {
   $('clientId').value     = data.clientId     || DEFAULT_CLIENT_ID;
   $('clientSecret').value = data.clientSecret || DEFAULT_CLIENT_SECRET;
-  $('enabled').checked  = data.enabled  !== false;
-  $('autoSkip').checked = data.autoSkip !== false;
+  $('enabled').checked        = data.enabled        !== false;
+  $('autoSkip').checked       = data.autoSkip       !== false;
+  $('trashAfterAuth').checked = data.trashAfterAuth !== false;
   data.gmailProfile ? showSignedIn(data.gmailProfile) : showSignedOut();
 });
 
 // ── Toggles ───────────────────────────────────────────────────────────────────
-$('enabled').addEventListener('change',  () => chrome.storage.local.set({ enabled:   $('enabled').checked }));
-$('autoSkip').addEventListener('change', () => chrome.storage.local.set({ autoSkip: $('autoSkip').checked }));
+$('enabled').addEventListener('change',        () => chrome.storage.local.set({ enabled:        $('enabled').checked }));
+$('autoSkip').addEventListener('change',       () => chrome.storage.local.set({ autoSkip:       $('autoSkip').checked }));
+$('trashAfterAuth').addEventListener('change', () => chrome.storage.local.set({ trashAfterAuth: $('trashAfterAuth').checked }));
 
 // ── Sign in ───────────────────────────────────────────────────────────────────
 $('btnSignIn').addEventListener('click', () => {
